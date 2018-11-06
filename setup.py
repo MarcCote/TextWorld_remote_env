@@ -78,7 +78,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'textworld-remote-env = textworld_remote_env.cli:main',
+            'textworld-remote-evaluator-service = textworld_remote_env.service:main',
         ]
     },
 )

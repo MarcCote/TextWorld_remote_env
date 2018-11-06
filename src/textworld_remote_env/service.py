@@ -17,6 +17,7 @@ Why does this file exist, and why not put this in __main__?
 import click
 
 
+
 @click.command()
 @click.argument('names', nargs=-1)
 def main(names):
