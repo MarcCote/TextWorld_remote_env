@@ -1,0 +1,19 @@
+class EvaluationState:
+    EVALUATION_PENDING="EP"
+    EVALUATION_RUNNING="ER"
+    EVALUATION_SUCCESSFUL="ES"
+    EVALUATION_ERROR="EE"
+    
+class EpisodeState:
+    EPISODE_PENDING="eP"
+    EPISODE_RUNNING="eR"
+    EPISODE_SUCCESSFUL="eS"
+    EPISODE_ERROR="eE"
+
+class Commands:
+    GET_GAME_FILE="ggf"
+    ACTIVATE_STATE_TRACKING="ast"
+    COMPUTE_INTERMEDIATE_REWARD="cir"
+    STEP="s"
+    RESET="r"
+    CLOSE="c"

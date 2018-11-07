@@ -1,160 +1,182 @@
-import redis
-import json
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+
+# -*- coding: utf-8 -*-
 import os
-import pkg_resources
+import re
 import sys
+import textwrap
+import subprocess
+from pkg_resources import Requirement, resource_filename
+
+from typing import Mapping, Union, Tuple, List
+
 import numpy as np
-import hashlib
-import random
-from textworld_remote_env import messages
-import time
 
-class TextWorldRemoteEnv(object):
+from glk import ffi, lib
+from io import StringIO
+
+import textworld
+from textworld.generator.game import Game, GameProgression
+from textworld.generator.inform7 import Inform7Game
+from textworld.logic import Action, State
+from textworld.core import GameNotRunningError
+
+from textworld_remote_env.message_broker import ClientMessageBroker
+
+GLULX_PATH = resource_filename(
+                Requirement.parse('textworld'), 
+                'textworld/thirdparty/glulx/Git-Glulx'
+                )
+
+from textworld.envs.glulx.git_glulx_ml import MissingGameInfosError, \
+                    StateTrackingIsRequiredError, OraclePolicyIsRequiredError, \
+                    _strip_input_prompt_symbol, _strip_i7_event_debug_tags, \
+                    _detect_i7_events_debug_tags, GlulxGameState
+
+class RemoteEnv():
+    def __init__(self) -> None:
+        self.message_broker = ClientMessageBroker()
+    def start(self):
+        gamefile = self.message_broker.get_game_file()
+        if gamefile == False:
+            return False
+        else:
+            return GlulxEnvironmentWrapper(gamefile)
+
+class GlulxEnvironmentWrapper(textworld.Environment):
+    """ 
+    
     """
-        Redis client to interface with text_world_remote_env redis-service
-        The Docker container hosts a redis-server inside the container.
-        This client connects to the same redis-server, and communicates with the service.
-        The service eventually will reside outside the docker container, and will communicate
-        with the client only via the redis-server of the docker container.
-        On the instantiation of the docker container, one service will be instantiated parallely.
-        The service will accepts commands at "`service_id`::commands"
-        where `service_id` is either provided as an `env` variable or is
-        instantiated to "textworld_remote_redis_service_id"
-    """
-    def __init__(self, remote_host='127.0.0.1', remote_port=6379, remote_db=0, remote_password=None, verbose=False):
-        self.remote_host = remote_host
-        self.remote_port = remote_port
-        self.remote_db = remote_db
-        self.remote_password = remote_password
+    metadata = {'render.modes': ['human', 'ansi', 'text']}
+
+    def __init__(self, gamefile) -> None:
+        """ Creates a GitGlulxML from the given gamefile
+        """
+        super().__init__()
+
+        self.message_broker = ClientMessageBroker()
         
-        self.redis_pool = redis.ConnectionPool(
-                                host=remote_host, 
-                                port=remote_port, 
-                                db=remote_db, 
-                                password=remote_password)
-        self.namespace = "textworld_remote"
+        self._gamefile = gamefile
+        self._process = None
+
+        # Load initial state of the game.
+        filename, ext = os.path.splitext(gamefile)
+        game_json = filename + ".json"
+
+        if not os.path.isfile(game_json):
+            raise MissingGameInfosError()
+
+        self._state_tracking = False
+        self._compute_intermediate_reward = False
+        self.game = Game.load(game_json)
+        self.game_state = None
+
+    def activate_state_tracking(self) -> None:
+        self.message_broker.activate_state_tracking()
+        self._state_tracking = True
+
+    def compute_intermediate_reward(self) -> None:
+        self.message_broker.compute_intermediate_reward()
+        self._compute_intermediate_reward = True
+
+    def __del__(self) -> None:
+        self.close()
+
+    @property
+    def game_running(self) -> bool:
+        """ Determines if the game is still running. """
+        return self._process is not None and self._process.poll() is None
+
+    def step(self, command: str) -> Tuple[GlulxGameState, float, bool]:
+        self.message_broker.step(command)
+        if not self.game_running:
+            raise GameNotRunningError()
+
+        command = command.strip()
+        output = self._send(command)
+        if output is None:
+            raise GameNotRunningError()
+
+        self.game_state = self.game_state.update(command, output)
+        self.game_state.has_timeout = not self.game_running
+        return self.game_state, self.game_state.score, self.game_state.game_ended
+
+    def _send(self, command: str) -> Union[str, None]:
+        if not self.game_running:
+            return None
+
+        if len(command) == 0:
+            command = " "
+
+        c_command = ffi.new('char[]', command.encode('utf-8'))
+        result = lib.communicate(self._names_struct, c_command)
+        if result == ffi.NULL:
+            self.close()
+            return None
+
+        result = ffi.gc(result, lib.free)
+        return ffi.string(result).decode('utf-8')
+
+    def reset(self) -> GlulxGameState:
+        self.message_broker.reset()
+        if self.game_running:
+            self.close()
+
+        self._names_struct = ffi.new('struct sock_names*')
+
+        lib.init_glulx(self._names_struct)
+        sock_name = ffi.string(self._names_struct.sock_name).decode('utf-8')
+        self._process = subprocess.Popen(["%s/git-glulx-ml" % (GLULX_PATH,), self._gamefile, '-g', sock_name, '-q'])
+        c_feedback = lib.get_output_nosend(self._names_struct)
+        if c_feedback == ffi.NULL:
+            self.close()
+            raise ValueError("Game failed to start properly: {}.".format(self._gamefile))
+        c_feedback = ffi.gc(c_feedback, lib.free)
+
+        start_output = ffi.string(c_feedback).decode('utf-8')
+
+        self.game_state = GlulxGameState(self)
+        self.game_state.init(start_output, self.game, self._state_tracking, self._compute_intermediate_reward)
+
+        # TODO: check if the game was compiled in debug mode. You could parse
+        #       the output of the following command to check whether debug mode
+        #       was used or not (i.e. invalid action not found).
+        self._send('actions')  # Turn on debug print for Inform7 action events.
+        self._send('restrict commands')  # Restrict Inform7 commands.
+
+        return self.game_state
+
+    def close(self) -> None:
+        self.message_broker.close()
+        if self.game_running:
+            self._process.kill()
+            self._process = None
+
         try:
-            self.service_id =  os.environ['textworld_remote_redis_service_id']
-        except KeyError:
-            self.service_id = "textworld_remote_redis_service_id"
-        self.command_channel = "{}::{}::commands".format(
-                                        self.namespace, 
-                                        self.service_id
-                                        )
-        self.verbose = verbose
-        print("Connecting to Evaluator Service at {}:{}".format(
-            self.remote_host,
-            self.remote_port
-        ))
-        self.ping_pong()
-        print("Connected !")
+            lib.cleanup_glulx(self._names_struct)
+        except AttributeError:
+            pass  # Attempted to kill before reset
 
-    def get_redis_connection(self):
-        return redis.Redis(connection_pool=self.redis_pool)
+    def render(self, mode: str = "human") -> None:
+        outfile = StringIO() if mode in ['ansi', "text"] else sys.stdout
 
-    def _generate_response_channel(self):
-        random_hash = hashlib.md5("{}".format(
-                                random.randint(0, 10**10)
-                            ).encode('utf-8')).hexdigest()
-        response_channel = "{}::{}::response::{}".format(   self.namespace,
-                                                            self.service_id,
-                                                            random_hash)
-        return response_channel
+        msg = self.game_state.feedback.rstrip() + "\n"
+        if self.display_command_during_render and self.game_state.command is not None:
+            msg = '> ' + self.game_state.command + "\n" + msg
 
-    def _blocking_request(self, _request):
-        """
-            request:
-                -command_type
-                -payload
-                -response_channel
-            response: (on response_channel)
-                - RESULT
-            * Send the payload on command_channel (self.namespace+"::command")
-                ** redis-left-push (LPUSH)
-            * Keep listening on response_channel (BLPOP)
-        """
-        assert type(_request) ==type({})
-        _request['response_channel'] = self._generate_response_channel()
+        # Wrap each paragraph.
+        if mode == "human":
+            paragraphs = msg.split("\n")
+            paragraphs = ["\n".join(textwrap.wrap(paragraph, width=80)) for paragraph in paragraphs]
+            msg = "\n".join(paragraphs)
 
-        _redis = self.get_redis_connection()
-        """
-            The client always pushes in the left
-            and the service always pushes in the right
-        """
-        if self.verbose: print("Request : ", json.dumps(_response))
-        # Push request in command_channel
-        _redis.lpush(self.command_channel, json.dumps(_request))
-        ## TODO: Check if we can use `repr` for json.dumps string serialization
-        # Wait with a blocking pop for the response
-        _response = _redis.blpop(_request['response_channel'])[1]
-        if self.verbose: print("Response : ", _response)
-        _response = json.loads(_response)
-        if _response['type'] == messages.TEXTWORLD_REMOTE_ENV.ERROR:
-            raise Exception(json.dumps(_response))
-        else:
-            return _response
+        outfile.write(msg + "\n")
 
-    def ping_pong(self):
-        """
-            Official Handshake with the grading service
-            Send a PING
-            and wait for PONG
-            If not PONG, raise error
-        """
-        _request = {}
-        _request['type'] = messages.TEXTWORLD_REMOTE_ENV.PING
-        _request['payload'] = {}
-        _response = self._blocking_request(_request)
-        if _response['type'] != messages.TEXTWORLD_REMOTE_ENV.PONG:
-            raise Exception("Unable to perform handshake with the redis service. Expected PONG; received {}".format(json.dumps(_response)))
-        else:
-            return True
+        if mode == "text":
+            outfile.seek(0)
+            return outfile.read()
 
-    def env_create(self):
-        _request = {}
-        _request['type'] = messages.TEXTWORLD_REMOTE_ENV.ENV_CREATE
-        _request['payload'] = {}
-        _response = self._blocking_request(_request)
-        observation = _response['payload']['observation']
-        return observation
-
-    def env_reset(self):
-        _request = {}
-        _request['type'] = messages.TEXTWORLD_REMOTE_ENV.ENV_RESET
-        _request['payload'] = {}
-        _response = self._blocking_request(_request)
-        observation = _response['payload']['observation']
-        return observation
-
-    def env_step(self, action, render=False):
-        """
-            Respond with [observation, reward, done, info]
-        """
-        action = np.array(action).tolist()
-        _request = {}
-        _request['type'] = messages.TEXTWORLD_REMOTE_ENV.ENV_STEP
-        _request['payload'] = {}
-        _request['payload']['action'] = action
-        _response = self._blocking_request(_request)
-        _payload = _response['payload']
-        observation = _payload['observation']
-        reward = _payload['reward']
-        done = _payload['done']
-        info = _payload['info']
-        return [observation, reward, done, info]
-
-    def submit(self):
-        _request = {}
-        _request['type'] = messages.TEXTWORLD_REMOTE_ENV.ENV_SUBMIT
-        _request['payload'] = {}
-        _response = self._blocking_request(_request)
-        if os.getenv("CROWDAI_BLOCKING_SUBMIT"):
-            """
-            If the submission is supposed to happen as a blocking submit,
-            then wait indefinitely for the evaluator to decide what to 
-            do with the container.
-            """
-            while True:
-                time.sleep(10)
-        
-        return _response['payload']
+        if mode == 'ansi':
+            return outfile

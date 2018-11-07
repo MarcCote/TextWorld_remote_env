@@ -68,7 +68,7 @@ setup(
     ],
     install_requires=[
         'click',
-        'py-textworld'
+        'crowdai_api'
         # eg: 'aspectlib==1.1.1', 'six>=1.7',
     ],
     extras_require={
