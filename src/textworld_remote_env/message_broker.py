@@ -36,7 +36,6 @@ class ClientMessageBroker:
                     state.Commands.STEP,
                     payload={"command" : command}
                     )
-        print(response)
         assert response["ack"] == True, "Server did not acknowledge a command"
     
     def reset(self):

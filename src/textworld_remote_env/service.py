@@ -47,6 +47,7 @@ class TextWorldRemoteEnvEvaluatorService:
         self.current_game = -1
         self.current_env = False
         self.evaluation_state = {}
+        self.init_evaluation_state()
     
     def init_evaluation_state(self):
         absolute_game_paths = []
@@ -71,7 +72,10 @@ class TextWorldRemoteEnvEvaluatorService:
             self.evaluation_state["episodes"].append(
                 _episode_object
             )
-    
+
+    def get_current_episode_oject(self):
+        return self.evaluation_state["episodes"][self.current_game]
+        
     def handle_get_game_file(self):
         self.current_game += 1
         if self.current_game >= len(self.game_paths):
@@ -107,9 +111,18 @@ class TextWorldRemoteEnvEvaluatorService:
         """
             TODO: Do reward computations etc here
         """
+        _episode_object = self.get_current_episode_oject()
+        _episode_object["steps"] = game_state.nb_moves
+        _episode_object["reward"] = game_state.score
         self.message_broker.acknowledge_command()
     
     def handle_reset(self):
+        if self.current_env.game_running:
+            raise Exception("Attempt to call env.reset on an already running environment.")
+
+        _episode_object = self.get_current_episode_oject()
+        _episode_object["state"] = state.EpisodeState.EPISODE_RUNNING
+
         self.current_env.reset()
         self.message_broker.acknowledge_command()
     
