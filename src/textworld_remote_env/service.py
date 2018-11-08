@@ -223,13 +223,14 @@ class TextWorldRemoteEnvEvaluatorService:
         return next(self.message_broker.remote_handler)
 
     def run_wrapper(self):
+        print("Listening for Agent....")
         while True:
             try:
                 _event = self.get_next_command()
             except timeout_decorator.timeout_decorator.TimeoutError:
                 raise Exception("Vanishing Agent : Agent hasnt communicated with the evaluator for 10minutes. Abadoning evaluation.")
 
-            print(self.evaluation_state)
+            print(_event)
             if _event["event_type"] == state.Commands.GET_GAME_FILE:
                 self.handle_get_game_file()
             elif _event["event_type"] == state.Commands.ACTIVATE_STATE_TRACKING:
@@ -263,7 +264,7 @@ def main(game_paths_folder):
     game_paths = glob.glob(
                     os.path.join(game_paths_folder,"*.ulx")
                     )
-    print(game_paths)
+    print("Game Paths : ", game_paths)
     service = TextWorldRemoteEnvEvaluatorService(
         game_paths = game_paths
     )
