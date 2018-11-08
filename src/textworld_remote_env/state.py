@@ -9,6 +9,7 @@ class EpisodeState:
     EPISODE_RUNNING="eR"
     EPISODE_SUCCESSFUL="eS"
     EPISODE_ERROR="eE"
+    EPISODE_ABANDONED="eA"
 
 class Commands:
     GET_GAME_FILE="ggf"
