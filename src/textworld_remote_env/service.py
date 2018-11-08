@@ -77,6 +77,11 @@ class TextWorldRemoteEnvEvaluatorService:
             self.evaluation_state["episodes"].append(
                 _episode_object
             )
+        
+        # Sync Evaluation State with the Oracle
+        self.message_broker.sync_info_event_with_oracle(
+                self.evaluation_state,
+                force=True)
 
     def get_current_episode_oject(self):
         return self.evaluation_state["episodes"][self.current_game]
@@ -124,6 +129,10 @@ class TextWorldRemoteEnvEvaluatorService:
                 "score_secondary" : mean_time
             }
 
+            # Sync Evaluation State with the Oracle
+            self.message_broker.sync_success_event_with_oracle(
+                    self.evaluation_state,
+                    force=True)
 
             """
                 Return False
@@ -146,6 +155,12 @@ class TextWorldRemoteEnvEvaluatorService:
             _episode_object = self.get_current_episode_oject()
             _episode_object["begin_time"] = time.time()
 
+            # Sync Evaluation State with the Oracle
+            self.message_broker.sync_info_event_with_oracle(
+                    self.evaluation_state,
+                    force=True)
+
+
     def handle_activate_state_tracking(self):
         self.current_env.activate_state_tracking()
         self.message_broker.acknowledge_command()
@@ -166,7 +181,13 @@ class TextWorldRemoteEnvEvaluatorService:
         if done:
             _episode_object["state"] = state.EpisodeState.EPISODE_SUCCESSFUL
 
+        # Sync Evaluation State with the Oracle
+        self.message_broker.sync_info_event_with_oracle(
+                self.evaluation_state,
+                force=False)
+
         self.message_broker.acknowledge_command()
+
 
     def handle_reset(self):
         if self.current_env.game_running:
@@ -179,6 +200,11 @@ class TextWorldRemoteEnvEvaluatorService:
         _episode_object = self.get_current_episode_oject()
         _episode_object["state"] = state.EpisodeState.EPISODE_RUNNING
 
+        # Sync Evaluation State with the Oracle
+        self.message_broker.sync_info_event_with_oracle(
+                self.evaluation_state,
+                force=False)
+
         self.current_env.reset()
         self.message_broker.acknowledge_command()
 
@@ -186,8 +212,21 @@ class TextWorldRemoteEnvEvaluatorService:
         self.current_env.close()
         self.message_broker.acknowledge_command()
 
-    def run(self):
-        for _event in self.message_broker.remote_handler:
+    @timeout_decorator.timeout(10*60) #Time out of 10 minutess
+    def get_next_command(self):
+        """
+            Try to get next command from the agent.
+            If the agent doesnt respond within 10 minutes, then throw a timeout
+        """
+        return next(self.message_broker.remote_handler)
+
+    def run_wrapper(self):
+        while True:
+            try:
+                _event = self.get_next_command()
+            except timeout_decorator.timeout_decorator.TimeoutError:
+                raise Exception("Vanishing Agent : Agent hasnt communicated with the evaluator for 10minutes. Abadoning evaluation.")
+
             print(self.evaluation_state)
             if _event["event_type"] == state.Commands.GET_GAME_FILE:
                 self.handle_get_game_file()
@@ -201,6 +240,20 @@ class TextWorldRemoteEnvEvaluatorService:
                 self.handle_reset()
             elif _event["event_type"] == state.Commands.CLOSE:
                 self.handle_close()
+
+    def run(self):
+        try:
+            self.run_wrapper()
+        except Exception as e:
+            self.evaluation_state["state"] = state.EvaluationState.EVALUATION_ERROR
+            self.evaluation_state["error"] = str(e)
+            if self.current_game >= 0:
+                self.evaluation_state["episodes"][self.current_game]["state"] = state.EpisodeState.EPISODE_ERROR
+
+            # Sync Evaluation State with the Oracle
+            self.message_broker.sync_error_event_with_oracle(
+                    self.evaluation_state,
+                    force=True)
 
 @click.command()
 @click.argument('game_paths', nargs=-1)

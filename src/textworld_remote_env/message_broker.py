@@ -2,6 +2,7 @@
 
 import crowdai_api
 from textworld_remote_env import state
+import time
 
 class ClientMessageBroker:
     def __init__(self):
@@ -52,14 +53,39 @@ class ServiceMessageBroker:
         self.remote_handler = crowdai_api.events.CrowdAIEvents()
         self.oracle_handler = crowdai_api.events.CrowdAIEvents(with_oracle=True)
 
+        self.last_oracle_update = 0
+        self.oracle_update_frequency = 10 # Every 10 seconds
+
     def send_game_file(self, game_file_path):
         self.remote_handler.send_blocking_call_response({
             "game_file" : game_file_path
         })
-    
+
     def acknowledge_command(self):
         self.remote_handler.send_blocking_call_response({
             "ack" : True
         })
-        
-        
+
+    def sync_info_event_with_oracle(self, payload={}, force=False):
+        if force or time.time() - self.last_oracle_update > self.oracle_update_frequency:
+            self.oracle_handler.register_event(
+                event_type=self.oracle_handler.CROWDAI_EVENT_INFO,
+                payload=payload
+            )
+            self.last_oracle_update = time.time()
+
+    def sync_success_event_with_oracle(self, payload={}, force=True):
+        if force or time.time() - self.last_oracle_update > self.oracle_update_frequency:
+            self.oracle_handler.register_event(
+                event_type=self.oracle_handler.CROWDAI_EVENT_SUCCESS,
+                payload=payload
+            )
+            self.last_oracle_update = time.time()
+
+    def sync_error_event_with_oracle(self, payload={}, force=True):
+        if force or time.time() - self.last_oracle_update > self.oracle_update_frequency:
+            self.oracle_handler.register_event(
+                event_type=self.oracle_handler.CROWDAI_EVENT_ERROR,
+                payload=payload
+            )
+            self.last_oracle_update = time.time()
