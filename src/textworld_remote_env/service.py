@@ -118,10 +118,15 @@ class TextWorldRemoteEnvEvaluatorService:
     
     def handle_reset(self):
         if self.current_env.game_running:
+            """
+                In the evaluation mode, the agent is allowed to call reset 
+                only once on a newly instantiated environment
+            """
             raise Exception("Attempt to call env.reset on an already running environment.")
 
         _episode_object = self.get_current_episode_oject()
         _episode_object["state"] = state.EpisodeState.EPISODE_RUNNING
+        self.evaluation_state["state"] = state.EvaluationState.EVALUATION_RUNNING
 
         self.current_env.reset()
         self.message_broker.acknowledge_command()
@@ -132,7 +137,7 @@ class TextWorldRemoteEnvEvaluatorService:
         
     def run(self):
         for _event in self.message_broker.remote_handler:
-            print(_event)
+            print(self.evaluation_state)
             if _event["event_type"] == state.Commands.GET_GAME_FILE:
                 self.handle_get_game_file()
             elif _event["event_type"] == state.Commands.ACTIVATE_STATE_TRACKING:

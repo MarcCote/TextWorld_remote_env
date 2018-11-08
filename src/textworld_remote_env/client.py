@@ -19,7 +19,6 @@ from io import StringIO
 
 import textworld
 from textworld.generator.game import Game, GameProgression
-from textworld.generator.inform7 import Inform7Game
 from textworld.logic import Action, State
 from textworld.core import GameNotRunningError
 
