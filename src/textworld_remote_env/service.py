@@ -131,6 +131,9 @@ class TextWorldRemoteEnvEvaluatorService:
                 "score_secondary" : mean_time
             }
 
+            print(  "Successful  evaluation state : ", 
+                    json.dumps(self.evaluation_state, indent=4))
+
             # Sync Evaluation State with the Oracle
             self.message_broker.sync_success_event_with_oracle(
                     self.evaluation_state,
@@ -253,6 +256,8 @@ class TextWorldRemoteEnvEvaluatorService:
             if self.current_game >= 0:
                 self.evaluation_state["episodes"][self.current_game]["state"] = state.EpisodeState.EPISODE_ERROR
 
+            print(  "Current evaluation state : ",
+                    json.dumps(self.evaluation_state, indent=4))
             # Sync Evaluation State with the Oracle
             self.message_broker.sync_error_event_with_oracle(
                     self.evaluation_state,
