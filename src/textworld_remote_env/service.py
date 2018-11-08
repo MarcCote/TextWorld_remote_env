@@ -31,6 +31,8 @@ import textworld
 import crowdai_api
 import random
 
+import glob
+
 ########################################################
 # CONSTANTS
 ########################################################
@@ -256,8 +258,12 @@ class TextWorldRemoteEnvEvaluatorService:
                     force=True)
 
 @click.command()
-@click.argument('game_paths', nargs=-1)
-def main(game_paths):
+@click.option('--game_paths_folder', required=True)
+def main(game_paths_folder):
+    game_paths = glob.glob(
+                    os.path.join(game_paths_folder,"*.ulx")
+                    )
+    print(game_paths)
     service = TextWorldRemoteEnvEvaluatorService(
         game_paths = game_paths
     )
