@@ -247,6 +247,12 @@ class TextWorldRemoteEnvEvaluatorService:
             elif _event["event_type"] == state.Commands.CLOSE:
                 self.handle_close()
 
+        # Sync Evaluation State with the Oracle
+        self.message_broker.sync_info_event_with_oracle(
+                self.evaluation_state,
+                force=True)
+
+
     def run(self):
         try:
             self.run_wrapper()
